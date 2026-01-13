@@ -256,10 +256,14 @@ class MarkerTrackerViewWidget(BoxLayout):
             # Create some random colors for visualizing the optical flow
             self.color = np.random.randint(0, 255, (100, 3))
 
+        sum_dx = 0
+        sum_dy = 0
         for i, (new, old) in enumerate(zip(good_new, good_old)):
             a, b = new.ravel()
             ix = int(self.Ox[i])
             iy = int(self.Oy[i])
+            sum_dx += a - ix
+            sum_dy += b - iy
             offrame = cv2.arrowedLine(
                 frame,
                 (ix, iy),
@@ -274,6 +278,9 @@ class MarkerTrackerViewWidget(BoxLayout):
                 offrame = cv2.circle(
                     offrame, (int(a), int(b)), 5, self.color[i].tolist(), -1
                 )
+        avg_dx = sum_dx / self.nct
+        avg_dy = sum_dy / self.nct
+        log_message(f"Avg dx: {avg_dx:.3f}, Avg dy: {avg_dy:.3f}")
 
         self.old_gray = frame_gray.copy()
 
