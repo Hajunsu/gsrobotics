@@ -1,5 +1,11 @@
 import os
 
+### shear force recording ###
+import csv
+import time
+import datetime
+##############################
+
 os.environ["KIVY_NO_ARGS"] = "1"
 from kivy.app import App
 from kivy.clock import Clock
@@ -25,7 +31,6 @@ import numpy as np
 from utilities.marker_tracker import MarkerTracker
 
 Config.set("input", "mouse", "mouse,multitouch_on_demand")
-
 
 class GelsightMini(App):
     def __init__(self, config: ConfigModel, **kwargs):
@@ -82,10 +87,13 @@ class MarkerTrackerViewWidget(BoxLayout):
         self.initialized: bool = False
         self.is_logging_data: bool = False
         self.data_logger: MarkerDataLogger = None
-        self.data_folder_path: str = os.path.join(os.path.expanduser("~"), "Desktop")
+        self.data_folder_path: str = "./recordings/shear_force_0"
         # Create UI elements:
         self.image_widget = Image()
         self.add_widget(self.image_widget)
+
+        if not os.path.exists(self.data_folder_path):
+            os.makedirs(self.data_folder_path)
 
         # Zoom layout
         zoom_layout = BoxLayout(
@@ -158,6 +166,11 @@ class MarkerTrackerViewWidget(BoxLayout):
         self.add_widget(Widget(size_hint_y=None, height=dp(10)))
 
         self.event = None
+
+        # shear force recording
+        self.avg_csv_file = None
+        self.avg_csv_writer = None
+        self.avg_csv_path = None
 
         # Bind key events for shortcuts
         Window.bind(on_key_down=self.on_key_down)
@@ -282,6 +295,15 @@ class MarkerTrackerViewWidget(BoxLayout):
         avg_dy = sum_dy / self.nct
         log_message(f"Avg dx: {avg_dx:.3f}, Avg dy: {avg_dy:.3f}")
 
+        ### shear force recording ###
+        if self.is_logging_data and self.avg_csv_writer is not None:
+            # 선택 1) 사람이 읽기 쉬운 timestamp
+            ts_str = datetime.datetime.now().isoformat(timespec="milliseconds")
+            self.avg_csv_writer.writerow([ts_str, f"{avg_dx:.6f}", f"{avg_dy:.6f}"])
+            # 데이터 유실 방지(너무 자주 flush하면 느려질 수 있어 10프레임마다 flush도 가능)
+            self.avg_csv_file.flush()
+        ##############################
+
         self.old_gray = frame_gray.copy()
 
     def stop(self):
@@ -289,6 +311,14 @@ class MarkerTrackerViewWidget(BoxLayout):
             self.event.cancel()
         if self.main_app.cam_stream.camera:
             self.main_app.cam_stream.camera.release()
+        
+        ### shear force recording ###
+        if self.avg_csv_file is not None:
+            self.avg_csv_file.flush()
+            self.avg_csv_file.close()
+            self.avg_csv_file = None
+            self.avg_csv_writer = None
+        ##############################
 
     def take_screenshot(self, instance=None):
         self.main_app.cam_stream.save_screenshot(filepath=self.data_folder_path)
@@ -298,15 +328,33 @@ class MarkerTrackerViewWidget(BoxLayout):
             return
 
         if not self.is_logging_data:
-
             self.is_logging_data = True
             self.register_data_btn.text = "Save Data"
+
+            ### shear force recording ###
+            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.avg_csv_path = os.path.join(self.data_folder_path, f"avg_dxdy_{ts}.csv")
+            self.avg_csv_file = open(self.avg_csv_path, "w", newline="")
+            self.avg_csv_writer = csv.writer(self.avg_csv_file)
+            self.avg_csv_writer.writerow(["timestamp", "avg_dx", "avg_dy"])
+            self.avg_csv_file.flush()
+            ##############################
+
         else:
             self.data_logger.save_data(
                 save_csv=True, save_npy=True, folder=self.data_folder_path
             )
             self.is_logging_data = False
             self.register_data_btn.text = "Start Recording"
+
+            #### shear force recording ###
+            if self.avg_csv_file is not None:
+                self.avg_csv_file.flush()
+                self.avg_csv_file.close()
+                self.avg_csv_file = None
+                self.avg_csv_writer = None
+                log_message(f"Saved avg_dx/avg_dy CSV: {self.avg_csv_path}")
+            ##############################
 
     def on_key_down(self, window, key, *args):
         # Space key for screenshot

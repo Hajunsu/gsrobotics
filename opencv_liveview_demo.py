@@ -13,8 +13,7 @@ brd_frac = 0
 
 imgw = 640 # FULLWIDTH
 imgh = 480 # FULLHEIGHT
-brd_frac = 0.15
-
+brd_frac = 0.05 # default 0.15
 
 def show_image():
     counter = 0

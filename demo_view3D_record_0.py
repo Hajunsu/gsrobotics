@@ -1,3 +1,8 @@
+### normal force record ###
+import csv
+import datetime
+###########################
+
 import cv2
 import numpy as np
 from config import ConfigModel
@@ -14,6 +19,11 @@ from utilities.gelsightmini import GelSightMini
 from utilities.logger import log_message
 
 
+import os
+record_path = "./recordings/normal_force_0"
+if not os.path.exists("./recordings/normal_force_0"):
+    os.makedirs("./recordings/normal_force_0")
+
 def UpdateView(
     image: np.ndarray,
     cam_stream: GelSightMini,
@@ -22,6 +32,11 @@ def UpdateView(
     cmap: np.ndarray,
     config: ConfigModel,
     window_title: str,
+    # === normal force record ===
+    is_logging: bool = False,
+    csv_writer=None,
+    csv_file=None,
+    #############################
 ):
 
     # Compute depth map and gradients.
@@ -29,8 +44,6 @@ def UpdateView(
         image=image,
         markers_threshold=(config.marker_mask_min, config.marker_mask_max),
     )
-
-    # print("Sum Depth :", np.sum(depth_map))
 
     if visualizer3D:
         visualizer3D.update(depth_map, gradient_x=grad_x, gradient_y=grad_y)
@@ -42,20 +55,24 @@ def UpdateView(
     depth_map_normalized = normalize_array(array=depth_map_trimmed, min_divider=10)
     depth_rgb = apply_cmap(data=depth_map_normalized, cmap=cmap)
 
-    # print("depth map min / max / sum positive :", np.min(depth_map), np.max(depth_map), np.sum(depth_map[depth_map > 0]))
+    contact_mask_bool = contact_mask.astype(bool)
 
-    print("depth sum positive :", np.sum(depth_map[depth_map > 0]))
-    # print("sum positive depth values :", np.sum(depth_map[depth_map > 0]))
+    # === depth sum positive (inside contact mask) + CSV logging ===
+    depth_sum_pos = float(np.sum(depth_map[(depth_map > 0)]))
+    # print("depth sum positive :", depth_sum_pos)
 
-    # print("contact mask :", np.sum(contact_mask))
-    # print("depth map trimmed :", np.sum(depth_map_trimmed))
-    # print("depth map normalized :", np.sum(depth_map_normalized))
+    if is_logging and (csv_writer is not None):
+        ts_str = datetime.datetime.now().isoformat(timespec="milliseconds")
+        csv_writer.writerow([ts_str, f"{depth_sum_pos:.6f}"])
+        if csv_file is not None:
+            csv_file.flush()
+    # ============================================================
 
     # Convert masks to 8-bit grayscale.
-    contact_mask = (contact_mask * 255).astype(np.uint8)
+    contact_mask_u8 = (contact_mask_bool * 255).astype(np.uint8)
 
     # Convert grayscale images to 3-channel for stacking.
-    contact_mask_rgb = cv2.cvtColor(contact_mask, cv2.COLOR_GRAY2BGR)
+    contact_mask_rgb = cv2.cvtColor(contact_mask_u8, cv2.COLOR_GRAY2BGR)
 
     # Apply labels above images
     frame_labeled = stack_label_above_image(
@@ -64,6 +81,7 @@ def UpdateView(
 
     depth_labeled = stack_label_above_image(depth_rgb, "Depth", 30)
     contact_mask_labeled = stack_label_above_image(contact_mask_rgb, "Contact Mask", 30)
+
     # Increase spacing between images by adding black spacers
     spacing_size = 30
     horizontal_spacer = np.zeros(
@@ -133,9 +151,15 @@ def View3D(config: ConfigModel):
     )
     devices = cam_stream.get_device_list()
     log_message(f"Available camera devices: {devices}")
-    # For testing, select device index 0 (adjust if needed).
     cam_stream.select_device(config.default_camera_index)
     cam_stream.start()
+
+    # === normal force record: logging state/handles ===
+    is_logging = False
+    csv_file = None
+    csv_writer = None
+    csv_path = None
+    # ==================================================
 
     # Main loop: capture frames, compute depth map, and update the 3D view.
     try:
@@ -156,17 +180,41 @@ def View3D(config: ConfigModel):
                 cmap=cmap,
                 config=config,
                 window_title=WINDOW_TITLE,
+                # === normal force record args ===
+                is_logging=is_logging,
+                csv_writer=csv_writer,
+                csv_file=csv_file,
+                ##############################
             )
 
-            # Exit conditions.
-            # When press 'q' on keyboard
-            if cv2.waitKey(1) & 0xFF == ord("q"):
+            key = cv2.waitKey(1) & 0xFF
+
+            # Enter toggles recording (some environments use 13, others 10)
+            if key in (13, 10):
+                if not is_logging:
+                    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                    csv_path = f"{record_path}/depth_sum_positive_{ts}.csv"
+                    csv_file = open(csv_path, "w", newline="")
+                    csv_writer = csv.writer(csv_file)
+                    csv_writer.writerow(["timestamp", "depth_sum_positive"])
+                    csv_file.flush()
+                    is_logging = True
+                    log_message(f"Recording START: {csv_path}")
+                else:
+                    is_logging = False
+                    if csv_file is not None:
+                        csv_file.flush()
+                        csv_file.close()
+                    csv_file = None
+                    csv_writer = None
+                    log_message("Recording STOP")
+
+            # q to quit
+            if key == ord("q"):
                 break
 
-            # Check if the window has been closed by the user.
-            # cv2.getWindowProperty returns a value < 1 when the window is closed.
+            # Window close handling
             if cv2.getWindowProperty(WINDOW_TITLE, cv2.WND_PROP_VISIBLE) < 1:
-                # workaround to better catch widnow exit request
                 for _ in range(5):
                     cv2.waitKey(1)
                 break
@@ -174,6 +222,11 @@ def View3D(config: ConfigModel):
     except KeyboardInterrupt:
         log_message("Exiting...")
     finally:
+        # Close CSV if still open
+        if csv_file is not None:
+            csv_file.flush()
+            csv_file.close()
+
         # Release the camera and close windows.
         if cam_stream.camera is not None:
             cam_stream.camera.release()
@@ -208,7 +261,7 @@ if __name__ == "__main__":
         log_message(
             f"Using default_config variable from 'config.py' if './default_config.json' is not available"
         )
-        args.gs_config = "default_config.json"
+        args.gs_config = "default_config_record_0.json"
 
     gs_config = GSConfig(args.gs_config)
     View3D(config=gs_config.config)
