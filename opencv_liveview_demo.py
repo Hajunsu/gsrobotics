@@ -22,7 +22,7 @@ def show_image():
         target_height=imgh,
         border_fraction=brd_frac)
 
-    deviceidx = cam.select_device()
+    deviceidx = cam.select_device(device_idx=0)
 
     start = datetime.datetime.now()
 

@@ -176,7 +176,7 @@ class GelSightMini:
 
         if self.camera:
             self.camera.release()
-
+        
         self.camera = Camera(device=device_id)
         try:
             self.camera.open()
